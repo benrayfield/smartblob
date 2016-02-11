@@ -1,2 +1,4 @@
 # smartblob
 pluggable brains into 2d physics sim of realtime reshapable blob
+
+A small framework (TODO much simplifying to do now that spring dampening obsoletes much of the experimental physics code) for building a deeper kind of 2d physics games. A smartblob is a 2d triangle mesh which can form into any shape, depending on how its pluggable brain tells it to shape each triangle as distance constraints andOr triangle volume and depending on how they bounce on and bend and grab eachother. Pluggable brain API is still in-progress. Planned brains will be realtime deeplearning on vectors where each dimension is volume of a triangle or distance between their corners. The games made possible by this will include deeper versions of things like crayon physics, world of goo, angry birds, hill climb racing, monkeyball, sonic the hedgehog, worms, but not like any of those as it will be a new genre of game where AI makes the rules and shapes in realtime.
