@@ -1,4 +1,4 @@
-/** Ben F Rayfield offers HumanAiCore opensource GNU LGPL */
+/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
 package humanaicore.realtimeschedulerTodoThreadpool;
 
 /** Similar to TimedEvent and used as a parameter in Eventable.event(Object)

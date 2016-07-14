@@ -1,0 +1,1540 @@
+<!DOCTYPE html>
+<html><body>
+<input type=checkbox id='chkPause'>
+<video width="128" height="128" id="video" autoplay="autoplay" style="transform:scale(-1,1);"></video>
+<canvas width="128" height="384" id="canvas" style="transform:scale(-1,1);"></canvas>
+<div id='testDiv'/>
+<script>
+//"use strict";
+
+//TODO write "hidden" (without quotes) in video tag to increase speed
+
+//https://youtu.be/rgIkcQN2jn4
+
+//Ben F Rayfield offers Smartblob opensource GNU GPL 2+
+
+var log = function(line){
+	console.log(line);
+};
+
+var ajaxCallsInProgress = 0;
+
+ajaxSend = function(stringSendToServer){
+	ajaxCallsInProgress++;
+	//log('Saying to server: '+stringSendToServer);
+	try{
+		var jax = 'no ajax object created';
+		if(window.XMLHttpRequest){ 
+			jax = new window.XMLHttpRequest();
+		}else if(window.ActiveXObject){
+			jax = new window.ActiveXObject('Microsoft.XMLHTTP');
+		}
+		jax.onreadystatechange = function(){
+			if(jax.readyState == 4){
+				ajaxReceive(stringSendToServer, jax.responseText);
+			}
+		};
+		jax.open('GET', 'http://'+window.location.host+'/'+stringSendToServer, true);
+		jax.send(null);
+	}catch(e){
+		alert(e);
+	}
+};
+
+ajaxReceive = function(stringSentToServer, stringReceivedFromServer){
+	lastAjaxFinishedWhen = time();
+	ajaxCallsInProgress--;
+	//log('Server said: '+stringReceivedFromServer);
+};
+
+var angle0InclTo2PiExcl = function(angle){
+	var circle = 2*Math.PI;
+	angle %= circle;
+	if(angle < 0) angle += circle;
+	return angle;
+};
+
+var angleNegPiToPiExcl = function(angle){
+	angle = angle0InclTo2PiExcl(angle);
+	if(Math.PI <= angle) angle -= 2*Math.PI
+	return angle;
+};
+
+
+var video = document.getElementById('video');
+var videoStream = null;
+
+var canvas = document.getElementById('canvas');
+var canvasContext = null;
+//var canvasContext = canvas.getContext('2d');
+//var imageData = context.createImageData(canvas.width,canvas.height);
+//var imageData = context.getImageData(0, 0, video.width, video.height);
+//var pixels = imageData.data;
+
+//var canvasImageData = canvasContext.getImageData(0, 0, canvas.width, canvas.height);
+//canvasContext.putImageData(canvasImageData, 0, 0);
+//var canvasPixels = canvasImageData.data;
+
+var time = function(){
+	return Date.now()*.001;
+};
+
+var canvasImageData = null;
+var canvasPixels = null;
+
+var byteRect = null;
+
+var started = false;
+
+var fourHexDigitsForBifraction = function(bifraction){
+	var s = Math.max(0, Math.min(Math.floor((.5+.5*bifraction)*0x10000), 0xffff)).toString(16);
+	while(s.length < 4) s = '0'+s;
+	return s;
+};
+
+log('hh'+fourHexDigitsForBifraction(-.55));
+log('hhh'+fourHexDigitsForBifraction(.55));
+
+var colorDimRed = 0;
+var colorDimGreen = 1;
+var colorDimBlue = 2;
+var colorDimAlpha = 3;
+
+//centerY, centerX, and radius can be scalars. Does bounds checking
+var paintCircle = function(byteRect, centerY, centerX, radius, redByte, greenByte, blueByte){
+	var minYI = Math.max(0, Math.min(Math.floor(centerY-radius), byteRect.height-1));
+	var maxYI = Math.max(0, Math.min(Math.ceil(centerY+radius), byteRect.height-1));
+	var minXI = Math.max(0, Math.min(Math.floor(centerX-radius), byteRect.width-1));
+	var maxXI = Math.max(0, Math.min(Math.ceil(centerX+radius), byteRect.width-1));
+	var radiusSq = radius*radius;
+	for(var y=minYI; y<=maxYI; y++){
+		var i = byteRect.index(y, minXI, 0);
+		for(var x=minXI; x<=maxXI; x++){
+			var dy = y-centerY;
+			var dx = x-centerX;
+			if(dy*dy + dx*dx <= radiusSq){
+				byteRect.bytes[i+colorDimRed] = redByte;
+				byteRect.bytes[i+colorDimGreen] = greenByte;
+				byteRect.bytes[i+colorDimBlue] = blueByte;
+			}
+			i += 4;
+		}
+	}
+};
+
+//readable and writable pixels as Uint8Array. A canvas is a kind of Uint8Array.
+//Single pixel read and write funcs are slow unless you just do a few places.
+//TODO Write horizontal lines of same color or 2 colors on end interpolating between,
+//and these lines can be derived from triangle which has different color at each corner.
+var ByteRect = function(bytes, height, width){
+	this.bytes = bytes;
+	this.height = height;
+	this.width = width;
+	this.index = function(y, x, colorDim){
+		return (y*this.width+x)*4+colorDim;
+	};
+	this.read = function(y, x, colorDim){
+		return this.bytes[(y*this.width+x)*4+colorDim];
+	};
+	this.write = function(y, x, colorDim, bright){
+		this.bytes[(y*this.width+x)*4+colorDim] = bright;
+	};
+	this.writeHoriz = function(y, fromX, toXExclusive, colorDim, fromBright, toBright){
+		var indexStart = this.index(y, fromX, colorDim);
+		var pixelSiz = toXExclusive-fromX;
+		var siz = pixelSiz*4;
+		var bright = fromBright;
+		var brightAdd = (toBright-fromBright)/pixelSiz;
+		for(var i=0; i<siz; i+=4){
+			bright += brightAdd;
+			this.bytes[indexStart+i] = Math.floor(bright) & 0xff;
+		}
+	};
+};
+
+/*
+//backed view of part of a ByteRect
+var SubRect = function(byteRect, innerY, innerX, innerHeight, innerWidth){
+	this.byteRect = byteRect;
+	this.innerY = innerY;
+	this.innerX = innerX;
+	this.innerHeight = innerHeight;
+	this.innerWidth = innerWidth;
+	this.index = function(y, x, colorDim){
+		return this.byteRect.index(innerY+y, innerX+x, colorDim);
+	};
+	this.read = function(y, x, colorDim){
+		return this.byteRect.read(innerY+y, innerX+x, colorDim);
+	};
+	this.write = function(y, x, colorDim, bright){
+		this.byteRect.write(innerY+y, innerX+x, colorDim, bright);
+	};
+};*/
+
+var normColorVec = function(colorVec){
+	var len = Math.sqrt(colorVec[0]*colorVec[0] + colorVec[1]*colorVec[1] + colorVec[2]*colorVec[2]);
+	if(len == 0){
+		colorVec[0] = colorVec[1] = colorVec[2] = Math.sqrt(1/3); //white, in this unit vector model
+	}else{
+		colorVec[0] /= len;
+		colorVec[1] /= len;
+		colorVec[2] /= len;
+	}
+};
+
+var Point = function(index, py, px, radius){
+	this.index = index;
+	this.py = py; //position
+	this.px = px;
+	//this.prevPy = py;
+	//this.prevPx = px;
+	this.sy = (Math.random()*2-1)*.4; //speed
+	this.sx = (Math.random()*2-1)*.4;
+	this.pyAdd = 0; //drain into px between phyics cycles
+	this.pxAdd = 0;
+	this.syAdd = 0; //drain into sy between physics cycles
+	this.sxAdd = 0;
+	this.seeY = py; //where I want to go because see part of target object. Can only see near.
+	this.seeX = px;
+	//How much does this point think its found part of the on screen object?
+	//Points that are less locked on should move more or follow those which are locked on more
+	//and follow those not locked on less, or something like that.
+	//When I'm holding the loop in my hands, it often misses a section of the loop and pulls it tight
+	//between 2 places it is locked on, or is too loose.
+	this.fractionLockedOn = .5;
+	this.midY = py;
+	this.midX = px;
+	//toward midpoint of a line which crosses this point and
+	//is parallel to the line through prevPoint and nextPoint.
+	this.tangentTargetY = py;
+	this.tangentTargetX = px;
+	this.prevPoint = null;
+	this.nextPoint = null;
+	this.radius = radius;
+	
+	this.wantColor = [1, .3, .3];
+	this.seeColor = [1,1,1];
+	normColorVec(this.wantColor);
+	normColorVec(this.seeColor);
+	
+	this.blurColorToHere = function(decay){
+		for(var colorDim=0; colorDim<3; colorDim++){
+			var near = (this.prevPoint.wantColor[colorDim]+this.nextPoint.wantColor[colorDim])/2;
+			var here = this.wantColor[colorDim];
+			this.wantColor[colorDim] = here*(1-decay) + decay*near;
+		}
+		normColorVec(this.wantColor);
+	};
+	
+	this.decaySeeColorIntoWantColor = function(decay){
+		for(var colorDim=0; colorDim<3; colorDim++){
+			this.wantColor[colorDim] = this.wantColor[colorDim]*(1-decay) + decay*this.seeColor[colorDim];
+		}
+		normColorVec(this.wantColor);
+	};
+	
+	this.resetForces = function(){
+		this.forcesY = 0; //Sum various forces into here then norm them and move a constant distance in this direction
+		this.forcesX = 0;
+		this.forcesDistY = 0; //Sum nonlinear distance constraint forces into here, then to forcesY and X
+		this.forcesDistX = 0;
+		//this.forcesMidY = 0; //Force from moving toward middle of prevPoint and nextPoint
+		//this.forcesMidX = 0;
+		//this.forcesSeeY = 0;
+		//this.forcesSeeX = 0;
+	};
+	
+	//this.forcesDistMult = 5;
+	this.forcesDistMult = .1;
+	
+	this.forcesSmMult = .05;
+	//this.forcesSmMult = .2;
+	
+	//writes forcesY and forcesX as a unit vector, after reading the dist, mid, and see forces andOr positions
+	this.normThenMergeForcesThenNormAgain = function(){
+		var fY = 0;
+		var fX = 0;
+		
+		var forcesDistLen = Math.sqrt(this.forcesDistY*this.forcesDistY + this.forcesDistX*this.forcesDistX);
+		if(forcesDistLen != 0){
+			var mult = this.forcesDistMult/forcesDistLen;
+			fY += this.forcesDistY*mult;
+			fX += this.forcesDistX*mult;
+		}
+		
+		//sm is see and mid (TODO in what proportion?).
+		//Average their positions since mid should be small, and see varies more.
+		//var smPy = (this.seeY + this.midY)/2;
+		//var smPx = (this.seeX + this.midX)/2;
+		var smPy = this.seeY;
+		var smPx = this.seeX;
+		var smDy = smPy-this.py;
+		var smDx = smPx-this.px;
+		var smLen = Math.sqrt(smDy*smDy + smDx*smDx);
+		if(smLen != 0){
+			var mult = this.forcesSmMult/smLen;
+			fY += smDy*mult;
+			fX += smDx*mult;
+		}
+		
+		var fLen = Math.sqrt(fY*fY + fX*fX);
+		if(fLen != 0){
+			fY /= fLen;
+			fX /= fLen;
+		}
+		
+		this.forcesY = fY;
+		this.forcesX = fX;
+	};
+	
+	this.amountSee = .000001;
+	this.minAmountSeeToMove = 1000000; //set by caller of this.see based on all Points' this.amountSee
+	
+	//Writes midY and midX
+	//Similar to refreshTangentTarget but more stable because it uses mid instead of a parallel line.
+	this.updateMid = function(){
+		this.midY = (this.prevPoint.py + this.nextPoint.py)/2;
+		this.midX = (this.prevPoint.px + this.nextPoint.px)/2;
+	};
+	
+	//observes near pixels at a vertical line and moves to average position of (TODO) target color
+	/*this.moveTowardSee = function(byteRect){
+		this.moveXTowardSee(byteRect);
+		this.moveYTowardSee(byteRect);
+	};*/
+	this.see = function(byteRect){ //update seeY and seeX if certain enough of what it sees
+		var pyI = Math.max(0, Math.min(Math.round(this.py), byteRect.height-1));
+		var pxI = Math.max(0, Math.min(Math.round(this.px), byteRect.width-1));
+		var radiusI = Math.round(this.radius);
+		var sumY = 0;
+		var sumMassY = 0;
+		var fromY = Math.max(0, Math.min(pyI-radiusI, byteRect.height-1));
+		var toYExcl = Math.max(0, Math.min(pyI+radiusI+1, byteRect.height));
+		normColorVec(this.wantColor);
+		var seeCol = [1,1,1];
+		var sqrt3 = Math.sqrt(3);
+		for(var colorDim=0; colorDim<3; colorDim++){
+			this.seeColor[colorDim] = 0;
+		}
+		//TODO merge duplicate code
+		for(var yI=fromY; yI<toYExcl; yI++){
+			for(var colorDim=0; colorDim<3; colorDim++){
+				seeCol[colorDim] = byteRect.read(yI, pxI, colorDim)/255;
+				this.seeColor[colorDim] += seeCol[colorDim];
+			}
+			//error: need brightness, but this makes everything equally bright: normColorVec(seeCol);
+			var fractionMatch = (seeCol[0]*this.wantColor[0] + seeCol[1]*this.wantColor[1] + seeCol[2]*this.wantColor[2])/sqrt3;
+			//var fractionMatch = seeCol[0]; //FIXME use dotProd like above
+			fractionMatch *= .999999; //in case round slightly above 1
+			if(fractionMatch < 0 || 1 < fractionMatch) throw 'fractionMatch='+fractionMatch;
+			//var fractionMatch = byteRect.read(yI, pxI, colorDimRed, 255)/255; //TODO "target color" using all 3 colorDims
+			sumMassY += fractionMatch;
+			sumY += yI*fractionMatch;
+		}
+		var sumX = 0;
+		var sumMassX = 0;
+		var fromX = Math.max(0, Math.min(pxI-radiusI, byteRect.width-1));
+		var toXExcl = Math.max(0, Math.min(pxI+radiusI+1, byteRect.width));
+		for(var xI=fromX; xI<toXExcl; xI++){
+			for(var colorDim=0; colorDim<3; colorDim++){
+				seeCol[colorDim] = byteRect.read(pyI, xI, colorDim)/255;
+				this.seeColor[colorDim] += seeCol[colorDim];
+			}
+			//error: need brightness, but this makes everything equally bright: normColorVec(seeCol);
+			var fractionMatch = (seeCol[0]*this.wantColor[0] + seeCol[1]*this.wantColor[1] + seeCol[2]*this.wantColor[2])/sqrt3;
+			//var fractionMatch = seeCol[0]; //FIXME use dotProd like above
+			//if(this.index == 4) log('fractionMatch: '+fractionMatch);
+			fractionMatch *= .999999; //in case round slightly above 1
+			if(fractionMatch < 0 || 1 < fractionMatch) throw 'fractionMatch='+fractionMatch;
+			//var fractionMatch = byteRect.read(pyI, xI, colorDimRed, 255)/255; //TODO "target color" using all 3 colorDims
+			sumMassX += fractionMatch;
+			sumX += xI*fractionMatch;
+		}
+		this.amountSee = (sumMassY + sumMassX)/2;
+		
+		//var minSee = 1.5;
+		//var minSee = .5;
+		//var minSee = .2;
+		//var minSee = .1;
+		
+		//this.minAmountSeeToMove should be set after prev call to this.see based on average amountSee of all Points
+		//if(this.index == 7) log('point7 this.minAmountSeeToMove='+this.minAmountSeeToMove+' this.amountSee='+this.amountSee+' y='+this.py+' x='+this.px+' sumMassY='+sumMassY+' sumMassX='+sumMassX+' this.minAmountSeeToMove='+this.minAmountSeeToMove);
+		if((this.minAmountSeeToMove <= sumMassY) && (this.minAmountSeeToMove <= sumMassX)){
+			this.fractionLockedOn = 1;
+			this.seeY = sumY/sumMassY;
+			this.seeX = sumX/sumMassX;
+			//if(this.index == 7) log('point7 seeY='+this.seeY+' seeX='+this.seeX);
+		}else{
+			this.fractionLockedOn = 0;
+		}
+		
+		normColorVec(this.seeColor); //for decaySeeColorIntoWantColor
+	};
+	/*this.accelTowardSee = function(seconds){
+		var dy = this.seeY-this.py;
+		var dx = this.seeX-this.px;
+		var mult = 150*seconds;
+		this.syAdd += mult*dy;
+		this.sxAdd += mult*dx;
+	};*/
+	this.springAccelToward = function(targetY, targetX, multDistance){
+		var dy = targetY-this.py;
+		var dx = targetX-this.px;
+		this.syAdd += multDistance*dy;
+		this.sxAdd += multDistance*dx;
+	};
+	this.constAccelToward = function(targetY, targetX, addToSpeed){
+		var dy = targetY - this.py;
+		var dx = targetX - this.px;
+		var len = Math.sqrt(dy*dy + dx*dx);
+		if(0 < len){
+			var mult = addToSpeed/len;
+			this.syAdd += mult*dy;
+			this.sxAdd += mult*dx;
+		}
+	};
+	this.constSymmetricAccelToward = function(otherPoint, addToTotalSpeed){
+		var dy = otherPoint.py - this.py;
+		var dx = otherPoint.px - this.px;
+		var len = Math.sqrt(dy*dy + dx*dx);
+		if(0 < len){
+			var mult = .5*addToTotalSpeed/len;
+			var addToEachSy = mult*dy;
+			var addToEachSx = mult*dx;
+			this.syAdd += addToEachSy;
+			this.sxAdd += addToEachSx;
+			otherPoint.syAdd -= addToEachSy;
+			otherPoint.sxAdd -= addToEachSx;
+		}
+	};
+	this.distance = function(otherPoint){
+		var dy = otherPoint.py - this.py;
+		var dx = otherPoint.px - this.px;
+		return Math.sqrt(dy*dy + dx*dx);
+	};
+	this.distanceYX = function(y, x){
+		var dy = y - this.py;
+		var dx = x - this.px;
+		return Math.sqrt(dy*dy + dx*dx);
+	};
+	this.moveToSee = function(){
+		this.py = this.seeY;
+		this.px = this.seeX;
+	};
+	this.speed = function(){
+		return Math.sqrt(this.sy*this.sy + this.sx*this.sx);
+	};
+	this.decaySpeed = function(decayFraction){ //Like friction except slows it proportional to its speed instead of constant
+		this.syAdd -= this.sy*decayFraction;
+		this.sxAdd -= this.sx*decayFraction;
+	};
+	this.friction = function(subtractFromSpeed){
+		var s = this.speed();
+		if(s == 0) return;
+		var newS = Math.max(0, s-subtractFromSpeed);
+		this.decaySpeed(1-newS/s);
+	};
+	this.decayPositionToward = function(targetY, targetX, decayFraction){
+		var dy = targetY - this.py;
+		var dx = targetX - this.px;
+		this.pyAdd += dy*decayFraction;
+		this.pxAdd += dx*decayFraction;
+	};
+	this.refreshTangentTarget = function(){ //updates tangetTargetY and tangentTargetX
+		var y2 = this.nextPoint.py;
+		var x2 = this.nextPoint.px;
+		var y = this.py;
+		var x = this.px;
+		var y1 = this.prevPoint.py;
+		var x1 = this.prevPoint.px;
+		
+		//find closest point on line between prevPoint and nextPoint
+		//http://www.java2s.com/Code/Java/2D-Graphics-GUI/Returnsclosestpointonsegmenttopoint.htm
+		var xDelta = x2 - x1;
+		var yDelta = y2 - y1;
+		var divide = (xDelta * xDelta + yDelta * yDelta);
+		if(divide == 0) return;
+		var u = ((x - x1) * xDelta + (y - y1) * yDelta) / divide;
+		var closestYOnLine = y1 + u * yDelta;
+		var closestXOnLine = x1 + u * xDelta;
+		
+		//vector from closest (to this point) point on line to this point
+		var closestToHereY = this.py - closestYOnLine;
+		var closestToHereX = this.px - closestXOnLine;
+		
+		//between prevPoint and nextPoint
+		var midY = (y1+y2)/2;
+		var midX = (x1+x2)/2;
+		
+		//Moving toward mid would slowly shrink a circle of evenly spread points
+		//because each point sticks out a little from the mid of prevPoint and nextPoint.
+		//Adjust that to keep the distance from that line, while moving parallel to the line.
+		//This can destabilize if prevPoint and nextPoint are very near eachother
+		//since the angle of the line through both would extremely vary angle,
+		//so this should only be used when they are both closer to this point than eachother,
+		//or another way to stabilize would be to only move or accel a constant amount.
+		this.tangentTargetY = midY+closestToHereY;
+		this.tangentTargetX = midX+closestToHereX;
+	};
+	this.limitSpeed = function(max){
+		var s = this.speed();
+		if(max < s){
+			this.decaySpeed(1-max/s);
+		}
+	};
+	/*
+	//TODO merge duplicate code
+	this.moveYTowardSee = function(byteRect){
+		var pyI = Math.round(this.py);
+		var pxI = Math.round(this.px);
+		var radiusI = Math.round(this.radius);
+		var sumY = 0;
+		var sumMass = 0;
+		for(var yI=pyI-radiusI; yI<pyI+radiusI; yI++){
+			var fractionMatch = byteRect.read(yI, pxI, colorDimRed, 255)/255; //TODO "target color" using all 3 colorDims
+			sumMass += fractionMatch;
+			sumY += yI*fractionMatch;
+		}
+		if(1.5 < sumMass){
+			this.prevPy = this.py;
+			this.py = sumY/sumMass;
+		}
+	};
+	this.moveXTowardSee = function(byteRect){
+		var pyI = Math.round(this.py);
+		var pxI = Math.round(this.px);
+		var radiusI = Math.round(this.radius);
+		var sumX = 0;
+		var sumMass = 0;
+		for(var xI=pxI-radiusI; xI<pxI+radiusI; xI++){
+			var fractionMatch = byteRect.read(pyI, xI, colorDimRed, 255)/255; //TODO "target color" using all 3 colorDims
+			sumMass += fractionMatch;
+			sumX += xI*fractionMatch;
+		}
+		if(1.5 < sumMass){
+			this.prevPx = this.px;
+			this.px = sumX/sumMass;
+		}
+	};
+	*/
+	this.moveBySpeed = function(seconds){ //drains syAdd into sy, and moves sy, and the same for x
+		this.sy += this.syAdd;
+		this.sx += this.sxAdd;
+		this.syAdd = 0;
+		this.sxAdd = 0;
+		this.py += this.pyAdd + seconds*this.sy;
+		this.px += this.pxAdd + seconds*this.sx;
+		this.pyAdd = 0;
+		this.pxAdd = 0;
+	};
+	
+	//this.moveDigitalMult = 2000;
+	//this.moveDigitalMult = 700;
+	this.moveDigitalMult = 200;
+	//this.moveDigitalMult = 120;
+	//this.moveDigitalMult = 50;
+	
+	this.moveDigital = function(seconds){
+		var mult = seconds*this.moveDigitalMult;
+		this.py += this.forcesY*mult;
+		this.px += this.forcesX*mult;
+	};
+	
+	this.paint = function(byteRect){
+		var pyI = Math.max(0, Math.min(Math.round(this.py), byteRect.height-1));
+		var pxI = Math.max(0, Math.min(Math.round(this.px), byteRect.width-1));
+		var seeYI = Math.max(0, Math.min(Math.round(this.seeY), byteRect.height-1));
+		var seeXI = Math.max(0, Math.min(Math.round(this.seeX), byteRect.width-1));
+		//var tangentTargetYI = Math.max(0, Math.min(Math.round(this.tangentTargetY), byteRect.height-1));
+		//var tangentTargetXI = Math.max(0, Math.min(Math.round(this.tangentTargetX), byteRect.width-1));
+		var midYI = Math.max(0, Math.min(Math.round(this.midY), byteRect.height-1));
+		var midXI = Math.max(0, Math.min(Math.round(this.midX), byteRect.width-1));
+		var radiusI = Math.round(this.radius);
+		var fromY = Math.max(0, Math.min(pyI-radiusI, byteRect.height-1));
+		var toYExcl = Math.max(0, Math.min(pyI+radiusI, byteRect.height));
+		//TODO rename this. Since its multiplied by bright which is a view of fractionLockedOn,
+		//its not actually the color we want. Its the same direction of color but not magnitude.
+		var wantColorByte = [];
+		var bright = .5+.5*this.fractionLockedOn;
+		for(var colorDim=0; colorDim<3; colorDim++){
+			wantColorByte[colorDim] = Math.max(0, Math.min(Math.floor(this.wantColor[colorDim]*bright*256), 255));
+		}
+		for(var yI=fromY; yI<toYExcl; yI++){
+			//byteRect.writeHoriz(yI, pxI-radiusI, pxI+radiusI, colorDimGreen, 255, 0);
+			//byteRect.write(yI, pxI, colorDimGreen, 255);
+			byteRect.write(yI, seeXI, colorDimBlue, 255);
+			//byteRect.write(yI, tangentTargetXI, colorDimBlue, 255);
+			//byteRect.write(yI, this.midXI, colorDimBlue, 255);
+			var i = byteRect.index(yI, pxI, 0);
+			for(var colorDim=0; colorDim<3; colorDim++){ //display this.wantColor as horizontal and vertical line
+				byteRect.bytes[i+colorDim] = wantColorByte[colorDim];
+			}
+		}
+		var fromX = Math.max(0, Math.min(pxI-radiusI, byteRect.width-1));
+		var toXExcl = Math.max(0, Math.min(pxI+radiusI, byteRect.width));
+		for(var xI=fromX; xI<toXExcl; xI++){
+			//byteRect.write(pyI, xI, colorDimGreen, 255);
+			byteRect.write(seeYI, xI, colorDimBlue, 255);
+			//byteRect.write(tangentTargetYI, xI, colorDimBlue, 255);
+			//byteRect.write(midYI, xI, colorDimBlue, 255);
+			var i = byteRect.index(pyI, xI, 0);
+			for(var colorDim=0; colorDim<3; colorDim++){ //display this.wantColor as horizontal and vertical line
+				byteRect.bytes[i+colorDim] = wantColorByte[colorDim];
+			}
+		}
+	};
+	this.toString = function(){
+		return "(Point index:"+this.index+" x"+this.px+" y"+this.py+")";
+	};
+	this.resetForces();
+};
+
+
+var SmartblobSeer = function(howManyCorners, centerY, centerX, radius){
+	this.corners = [];
+	this.firstRadius = radius;
+	//TODO update based on ave radius of points, but be careful not to change that radius by changing this
+	this.targetAdjacentDistance = -1;
+	this.firstTimeDidPhysicsDigital = null;
+	this.intervalPhysicsDigital = .01; //TODO vision less often? Or is reading a few small parts of it fast enough?
+	//this.intervalPhysicsDigital = .001;
+	//this.intervalPhysicsDigital = .5;
+	this.callsOfPhysicsDigital = 0;
+	//var pointRadius = 15;
+	var pointRadius = 12;
+	for(var i=0; i<howManyCorners; i++){
+		var angle = 2*Math.PI*i/howManyCorners;
+		var randY = (Math.random()*2-1)*1.5;
+		var randX = (Math.random()*2-1)*1.5;
+		var py = centerY-radius*Math.sin(angle) + randY;
+		var px = centerX+radius*Math.cos(angle) + randX;
+		this.corners.push(new Point(i, py, px, pointRadius));
+	}
+	for(var i=0; i<howManyCorners; i++){
+		var a = this.corners[i];
+		var b = this.corners[(i+1)%howManyCorners];
+		var c = this.corners[(i+2)%howManyCorners];
+		b.prevPoint = a;
+		b.nextPoint = c;
+	}
+	this.updateTargetAdjacentDistance = function(){
+		//var minRadius = this.firstRadius/2;
+		//var maxRadius = this.firstRadius*2;
+		var aveRadius = this.aveDevRadius()[0];
+		var aveCircumference = aveRadius*2*Math.PI;
+		var aveAdjDistIfCircle = aveCircumference/this.corners.length;
+		//FIXME TODO this.targetAdjacentDistance = aveAdjDistIfCircle*1.5;
+		this.targetAdjacentDistance = aveAdjDistIfCircle;
+		return this.targetAdjacentDistance;
+	};
+	this.centerYX = function(){
+		var sumY = 0;
+		var sumX = 0;
+		for(i in this.corners){
+			var c = this.corners[i];
+			sumY += c.py;
+			sumX += c.px;
+		};
+		var centerY = sumY/this.corners.length;
+		var centerX = sumX/this.corners.length;
+		return [centerY, centerX];
+	};
+	//Returns 0 (inclusive) to 2*Math.PI (exclusive)
+	//The more it bends, the less accurate this is, but need an estimated angle
+	//to align points between js and java.
+	//spreadByLinearInterpolate should use this to wrap spread differently.
+	this.estimateAngleAsIfWasCircular = function(){
+		var center = this.centerYX();
+		var centerY = center[0];
+		var centerX = center[0];
+		var sumRotatedDy=0, sumRotatedDx=0;
+		var retAngle = 0;
+		var siz = this.corners.length;
+		for(var i=0; i<siz; i++){
+			//Measure perimeter from constant angles spread evenly around circle
+			//so all rotatedDy will be about equal, and same for all rotatedDx.
+			var fromAngle = 2*Math.PI*i/siz;
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			var fromY0 = Math.sin(fromAngle);
+			var fromX0 = Math.cos(fromAngle);
+			//perpendicular
+			var fromY1 = fromX0;
+			var fromX1 = -fromY0;
+			//affineTransform
+			var rotatedDy = dy*fromX1 + dx*fromX0;
+			var rotatedDx = dy*fromY1 + dx*fromY0;
+			sumRotatedDy += rotatedDy;
+			sumRotatedDx += rotatedDx;
+		}
+		if(sumRotatedDy != 0 || sumRotatedDx != 0){
+			var len = Math.sqrt(sumRotatedDy*sumRotatedDy + sumRotatedDx*sumRotatedDx);
+			var normY = sumRotatedDy/len;
+			var normX = sumRotatedDx/len;
+			var c = Math.acos(normX);
+			retAngle = normY<0 ? 2*Math.PI-c : c;
+			//retAngle = 2*Math.PI-retAngle + Math.PI/2; //start pointing right
+		}
+		return retAngle-Math.PI/2;
+	};
+	//Depends on 
+	//Returns [ave, dev] of radius
+	this.aveDevRadius = function(){
+		//TODO merge duplicate code
+		var center = this.centerYX();
+		var centerY = center[0];
+		var centerX = center[1];
+		var rs = [];
+		var sumRadius = 0;
+		for(i in this.corners){
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			var r = Math.sqrt(dy*dy + dx*dx);
+			rs.push(r);
+			sumRadius += r;
+		};
+		var ave = sumRadius/this.corners.length;
+		var sumOfSquares = 0;
+		for(i in rs){
+			var diff = rs[i]-ave;
+			sumOfSquares += diff*diff;
+		}
+		var aveSquare = sumOfSquares/this.corners.length;
+		var dev = Math.sqrt(aveSquare);
+		//log('aveDevRadius '+ave+' '+dev);
+		return [ave, dev];
+	};
+	this.setAveDevRadius = function(aveDevNew){
+		this.setAveDevRadiusUsingObserved(this.aveDevRadius(), aveDevNew);
+	};
+	this.multRadius = function(mult){
+		var center = this.centerYX();
+		var centerY = center[0];
+		var centerX = center[1];
+		for(i in this.corners){
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			c.py = centerY + dy*mult;
+			c.px = centerX + dx*mult;
+		}
+	};
+	//If have what aveDevRadius returned, this is faster than computing it again
+	this.setAveDevRadiusUsingObserved = function(aveDevOld, aveDevNew){
+		var center = this.centerYX(); //TODO optimize only call this once? Is it much faster?
+		var centerY = center[0];
+		var centerX = center[1];
+		var oldAve = aveDevOld[0];
+		var oldDev = aveDevOld[1];
+		if(oldDev == 0){
+			log('oldDev is 0. End setAveDevRadiusUsingObserved early. time='+time());
+		}
+		var newAve = aveDevNew[0];
+		var newDev = aveDevNew[1];
+		for(i in this.corners){
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			var r = Math.sqrt(dy*dy + dx*dx);
+			if(r == 0) continue;
+			var rNorm = (r-oldAve)/oldDev;
+			var newR = Math.max(0, newAve + rNorm*newDev);
+			var multR = newR/r;
+			c.py = centerY+dy*multR;
+			c.px = centerX+dx*multR;
+		};
+	};
+	this.paint = function(byteRect){
+		//for(var i=0; i<200; i++){
+		//	byteRect.write(i, i, colorDimBlue, i);
+		//}
+		this.forEachCorner(function(c){ 
+			c.paint(byteRect);
+		});
+		var firstCorner = this.corners[0];
+		paintCircle(byteRect, firstCorner.py, firstCorner.px, firstCorner.radius/2, 128, 128, 128);
+		var oppositeCorner = this.corners[Math.floor(this.corners.length/2)];
+		paintCircle(byteRect, oppositeCorner.py, oppositeCorner.px, oppositeCorner.radius/2, 128, 128, 128);
+		var topCorner = this.corners[Math.floor(this.corners.length/4)];
+		paintCircle(byteRect, topCorner.py, topCorner.px, topCorner.radius/2, 210, 210, 210);
+		var bottomCorner = this.corners[Math.floor(this.corners.length*3/4)];
+		paintCircle(byteRect, bottomCorner.py, bottomCorner.px, bottomCorner.radius/2, 64, 64, 64);
+	};
+	this.forEachCorner = function(func){ //calls func(corner)
+		//ERROR: Causes problems with "this" referring to the param func instead of this SmartblobSeer
+		for(i in this.corners){
+			func(this.corners[i]);
+		};
+	};
+	//calls func(cornerHigh,cornerLow) where cornerHigh.index > cornerLow.index
+	this.forEachSetOf2Corner = function(func){
+		//ERROR: Causes problems with "this" referring to the param func instead of this SmartblobSeer
+		for(var high=1; high<this.corners.length; high++){
+			for(var low=0; low<high; low++){
+				func(this.corners[high], this.corners[low]);
+			}
+		}
+	};
+	this.updateMinAmountsToSee = function(){
+		/*var seeSum = 0;
+		var count = 0;
+		for(i=0; i<this.corners.length; i++){
+			var a = this.corners[i].amountSee;
+			if(0 < a){
+				seeSum += a;
+				count++;
+			}
+		}
+		//if(this.corners.length/3 <= count){
+		if(0 < seeSum){
+			var aveSee = seeSum/count;
+			for(i=0; i<this.corners.length; i++){
+				this.corners[i].minAmountSeeToMove = aveSee/10; //TODO decay slowly toward it so different parts can see different amounts?
+			}
+		}*/
+		for(i=0; i<this.corners.length; i++){
+			this.corners[i].minAmountSeeToMove = .5; //FIXME use aveSee
+		}
+	};
+	this.moveToSee = function(byteRect){
+		this.forEachCorner(function(c){ 
+			c.see(byteRect);
+			c.moveToSee(byteRect);
+		});
+		this.updateMinAmountsToSee();
+	};
+	
+	this.accelTowardSee = function(byteRect, seconds){
+		this.forEachCorner(function(c){ 
+			c.see(byteRect);
+			//c.springAccelToward(c.seeY, c.seeX, 170*seconds);
+			//c.springAccelToward(c.seeY, c.seeX, 1500*seconds);
+			//c.accelTowardSee(seconds);
+		});
+		this.updateMinAmountsToSee();
+	};
+	this.frictionEtc = function(seconds){
+		this.forEachCorner(function(c){ 
+			c.decaySpeed(3.5*seconds);
+			//c.decaySpeed(2.5*seconds);
+			//c.decaySpeed(1.5*seconds);
+			//c.decaySpeed(.5*seconds);
+			//c.decaySpeed(.2*seconds);
+			//c.limitSpeed(120);
+			c.limitSpeed(60);
+			//c.limitSpeed(30);
+		});
+	};
+	this.tangentNorm = function(seconds){
+		this.forEachCorner(function(c){
+			c.refreshTangentTarget();
+			//c.constAccelToward(c.tangentTargetY, c.tangentTargetX, seconds*.2);
+			c.springAccelToward(c.tangentTargetY, c.tangentTargetX, seconds*100);
+			//c.py = c.tangentTargetY; //FIXME accel instead
+			//c.px = c.tangentTargetX;
+			//var decay = Math.min(.3, seconds*15);
+			//var decay = Math.min(.3, seconds*5);
+			//c.decayPositionToward(c.tangentTargetY, c.tangentTargetX, decay);
+		});
+	};
+	
+	this.rotateCornerIndexs = function(i){
+		if(i < 0) i += this.corners.length;
+		var a = [];
+		for(var j=0; j<this.corners.length; j++){
+			a[j] = this.corners[(j+i)%this.corners.length];
+		}
+		this.corners = a;
+	};
+
+	//The decay var is how much to change positions
+	//Whatever shape of loop, spreads its corners evenly around that shape
+	//using linear interpolation of their y and x positions.
+	//Similar to moving toward mid of the prev and next point, this slightly shrinks the shape.
+	this.spreadByLinearInterpolateAndRotateAlongPerimeter = function(decay, angle){
+		//this.setSpreadYXVarsByLinearInterpolate = function(){
+		var siz = this.corners.length;
+		
+		/*angle -= Math.PI/2;
+		angle = 2*Math.PI-angle;
+		while(angle < 2*Math.PI) angle += 2*Math.PI;
+		angle = angle%(2*Math.PI);
+		*/
+		
+		var angleFraction = angle/(2*Math.PI);
+		//var angleFraction = 0;
+		//var angleFraction = .001;
+		
+		/*var mul = .005;
+		if(angleFraction < .5) angleFraction *= mul;
+		else angleFraction = 1-((1-angleFraction)*mul)
+		*/
+		
+		
+		//log('TODO Rotating '+angle);
+		
+		//angleFraction = 0;
+		
+		//If aligned on the same corner each time, it wont move but others will so they will
+		//move away from it by random paths even though on average its correct.
+		//To prevent that asymmetry, do it on random index each time by rotating the
+		//corner array, doing the norm, then rotating it back.
+		//Or could just change the math here to wrap differently.
+		//That alone causes more shrinking than enlarging, and causes chaotic change of size,
+		//and causes a little change in shape. To fix most of that,
+		//keep radiuses on same bellcurve before and after this norm,
+		//while letting external vision forces change the size and shape.
+		var randIndex = Math.max(0, Math.min(Math.floor(Math.random()*siz), siz-1));
+		this.rotateCornerIndexs(randIndex);
+		
+		var aveDevRadiusBeforeNorm = this.aveDevRadius();
+		
+		var oldY = [];
+		var oldX = [];
+		for(i in this.corners){
+			var c = this.corners[i];
+			oldY[i] = c.py;
+			oldX[i] = c.px;
+		}
+		
+		//Array from corners[0] to corners[corners.length], so first corner is first and last here
+		var surfaceDist = [];
+		var px = [];
+		var py = [];
+		surfaceDist[0] = 0;
+		py[0] = this.corners[0].py;
+		px[0] = this.corners[0].px;
+		for(var i=0; i<siz; i++){
+			var a = this.corners[i];
+			var iNext = (i+1)%siz;
+			var b = this.corners[iNext];
+			surfaceDist[i+1] = surfaceDist[i] + a.distance(b);
+		}
+		var perimeter = surfaceDist[siz]; //distance around surface
+		for(var i=0; i<siz; i++){
+			var fraction = i/siz;
+			fraction = (fraction+angleFraction)%1; //rotate along perimeter
+			var correctDist = perimeter*fraction;
+			//var correctDist = perimeter*(i+.5)/siz;
+			for(var j=1; j<=siz; j++){ //TODO optimize using binary search
+				if(correctDist < surfaceDist[j]){
+					//put corners[i] between corners[j] and corners[j+1 wrapped]
+					var distRemaining = correctDist-surfaceDist[j-1];
+					var jNext = j%siz;
+					var distNext = surfaceDist[jNext]-surfaceDist[j-1];
+					var fraction = distRemaining/distNext; //How much of jNext to use vs j-1
+					this.corners[i].py = this.corners[jNext].py*fraction + (1-fraction)*this.corners[j-1].py;
+					this.corners[i].px = this.corners[jNext].px*fraction + (1-fraction)*this.corners[j-1].px;
+					break;
+				}
+			}
+		}
+		
+		//Restore 1-decay fraction of old positions, keeping decay fraction of new positions
+		for(i in this.corners){
+			var c = this.corners[i];
+			c.py = oldY[i]*(1-decay) + decay*c.py;
+			c.px = oldX[i]*(1-decay) + decay*c.px;
+		}
+		
+		//keep new point spread but not change in bellcurve of radius
+		//var newAveDev = [aveDevRadiusBeforeNorm[0], 0]; //FIXME use aveDevBeforeNorm or maybe amplify dev a little
+		//this.setAveDevRadius(newAveDev);
+		//this.setAveDevRadius(aveDevRadiusBeforeNorm);
+		
+		var aveDevRadiusAfterNorm = this.aveDevRadius();
+		var mult = aveDevRadiusBeforeNorm[0]/aveDevRadiusAfterNorm[0];
+		this.multRadius(mult); //restore original radius by scaling all from center by same mult. Keep same shape.
+		
+		//rotate corners back to original indexs
+		this.rotateCornerIndexs(siz-randIndex);
+	};
+	
+	//Obsoleted by physicsDigital?
+	this.nonlinearAccel = function(seconds){
+		for(var high=1; high<this.corners.length; high++){
+			for(var low=0; low<high; low++){
+				var a = this.corners[high];
+				var b = this.corners[low];
+				var accel = this.chooseNonlinearAccelBetween(a, b);
+				if(accel != 0){
+					a.constSymmetricAccelToward(b, accel*seconds);
+				}
+			}
+		}
+	};
+	this.moveBySpeed = function(seconds){
+		this.forEachCorner(function(c){
+			c.moveBySpeed(seconds);
+		});
+	};
+	this.stayInsideRectangle = function(yStart, xStart, yEndExcl, xEndExcl){
+		for(i in this.corners){
+			var c = this.corners[i];
+			c.py = Math.max(yStart, Math.min(c.py, yEndExcl-1));
+			c.px = Math.max(xStart, Math.min(c.px, xEndExcl-1));
+		}
+	};
+	this.stayInsideCircle = function(centerY, centerX, maxRadius){
+		if(maxRadius < 0) throw 'maxRadius='+maxRadius;
+		for(i in this.corners){
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			var r = Math.sqrt(dy*dy + dx*dx);
+			if(maxRadius < r){
+				var mult = maxRadius/r;
+				c.py = centerY + dy*mult;
+				c.px = centerX + dx*mult;
+			}
+		}
+	};
+	
+	this.normPositions = function(){
+		var y = [];
+		var x = [];
+		var siz = this.corners.length;
+		for(var i=0; i<siz; i++){
+			var c = this.corners[i];
+			y[i] = c.py;
+			x[i] = c.px;
+		}
+		var minDist = 7.5;
+		for(var i=0; i<siz; i++){
+			var c = this.corners[i];
+			var lowIndex = (i+siz-1)%siz;
+			var highIndex = (i+siz+1)%siz;
+			var dy = y[highIndex]-y[lowIndex];
+			var dx = x[highIndex]-x[lowIndex];
+			var distSq = dy*dy + dx*dx;
+			if(minDist*minDist <= distSq){
+				c.py = (y[highIndex]+y[lowIndex])/2;
+				c.px = (x[highIndex]+x[lowIndex])/2;
+			}else{
+				c.py = c.prevPy;
+				c.px = c.prevPx;
+			}
+		}
+	};
+	
+	this.indexDiff = function(indexA, indexB){
+		var i = Math.abs(indexA-indexB);
+		return Math.min(i, this.corners.length-i);
+	};
+	this.minDistanceArray = [];
+	for(var i=0; i<Math.ceil(howManyCorners/2); i++){
+		var angle = 2*Math.PI*i/howManyCorners;
+		var	y0 = 0;
+		var x0 = this.firstRadius;
+		var y1 = this.firstRadius*Math.sin(angle);
+		var x1 = this.firstRadius*Math.cos(angle);
+		var dy = y1-y0;
+		var dx = x1-x0;
+		var d = Math.sqrt(dy*dy + dx*dx);
+		this.minDistanceArray[i] = d*.2;
+	}
+	this.minDistance = function(cornerA, cornerB){
+		var indexDiff = this.indexDiff(cornerA.index, cornerB.index);
+		return this.minDistanceArray[indexDiff];
+		/*
+		var a = this.targetAdjacentDistance;
+		if(indexDiff == 0){
+			return 0;
+		}else if(indexDiff == 1){
+			return a;
+		}else if(indexDiff == 2){
+			return a*2;
+		}else if(indexDiff == 3){
+			return a*2.5;
+		}else if(indexDiff == 4){
+			return a*3.3;
+		}else{
+			return a*4.1;
+		}*/
+	};
+	this.maxDistance = function(cornerA, cornerB){
+		/*var indexDiff = this.indexDiff(cornerA.index, cornerB.index);
+		//if(indexDiff < 5) return this.minDistance(cornerA, cornerB)*1.5;
+		//if(indexDiff < 3) return this.minDistance(cornerA, cornerB)*1.2;
+		return this.targetAdjacentDistance*indexDiff;
+		*/
+		return 1000000;
+	};
+	//this.nonlinearAccelMult = 128.5;
+	this.nonlinearAccelMult = 70;
+	//To prevent the curved loop from tangling or crossing itself or some of its parts
+	//getting too close or far apart, define an accel between each pair
+	//based on their distance on surface (by index), this.firstRadius, and their distance.
+	this.chooseNonlinearAccelBetween = function(cornerA, cornerB){
+		//var indexDiff = this.indexDiff(cornerA.index, cornerB.index);
+		var distance = cornerA.distance(cornerB);
+		var minD = this.minDistance(cornerA, cornerB);
+		var maxD = this.maxDistance(cornerA, cornerB);
+		if(minD<0 || maxD<0 || minD>maxD){
+			throw 'minD='+minD+' maxD='+maxD;
+		}
+		if(distance < minD){
+			return (distance-minD)*this.nonlinearAccelMult; //negative repels
+		}else if(maxD < distance){
+			return (distance-maxD)*this.nonlinearAccelMult; //positive attracts
+		}else{
+			return 0;
+		}
+	};
+	
+	this.physics = function(byteRect, seconds){
+		//this.physicsDigitalWhileBehindSchedule(byteRect, seconds);
+		var repeat = 20;
+		//var repeat = 5;
+		//var repeat = 10;
+		//var repeat = 1;
+		for(var r=0; r<repeat; r++){
+			this.physicsDigitalOnce(byteRect, seconds/repeat);
+		}
+		//var ang = seer.estimateAngleAsIfWasCircular();
+		//log('ang: '+ang);
+		//this.spreadByLinearInterpolate(1);
+	};
+	
+	/*this.physicsDigitalWhileBehindSchedule = function(byteRect, seconds){
+		var now = time();
+		var isTimeToDoPhysicsDigital = (this.callsOfPhysicsDigital==0)
+			|| (this.firstTimeDidPhysicsDigital + this.intervalPhysicsDigital*this.callsOfPhysicsDigital <= now);
+		if(isTimeToDoPhysicsDigital){
+			this.physicsDigitalOnce(byteRect, seconds);
+		}
+	};*/
+	
+	//TODO optimize: create another function which does this same thing except doesnt update visual forces
+	this.physicsDigitalOnce = function(byteRect, seconds){
+		if(this.firstTimeDidPhysicsDigital == null) this.firstTimeDidPhysicsDigital = time();
+		this.callsOfPhysicsDigital++;
+		
+		for(i in this.corners){
+			this.corners[i].resetForces();
+		}
+
+		for(var high=1; high<this.corners.length; high++){
+			for(var low=0; low<high; low++){
+				var a = this.corners[high];
+				var b = this.corners[low];
+				var accel = this.chooseNonlinearAccelBetween(a, b);
+				//Since this is physicSDigital, accel will get normed, so we dont need to multiply time
+				if(accel != 0){
+					var dy = b.py-a.py;
+					var dx = b.px-a.px;
+					var dist = Math.sqrt(dy*dy + dx*dx);
+					if(dist != 0){
+						var mult = .5*accel/dist;
+						var forceYEach = dy*mult;
+						var forceXEach = dx*mult;
+						//FIXME is this backward?
+						a.forcesDistY += forceYEach;
+						a.forcesDistX += forceXEach;
+						b.forcesDistY -= forceYEach;
+						b.forcesDistX -= forceXEach;
+					}
+				}
+			}
+		}
+		
+		for(i in this.corners){
+			this.corners[i].see(byteRect);
+		}
+		
+		this.updateMinAmountsToSee();
+		
+		/*var decay = 1.5*seconds;
+		for(i in this.corners){
+			this.corners[i].decaySeeColorIntoWantColor(decay);
+		}
+		decay *= 4;
+		for(i in this.corners){
+			this.corners[i].blurColorToHere(decay);
+		}*/
+		
+		//for(i in this.corners){
+		//	this.corners[i].updateMid();
+		//}
+		
+		
+		for(i in this.corners){
+			this.corners[i].normThenMergeForcesThenNormAgain();
+		}
+		
+		var maxPointRadius = 0;
+		for(i in this.corners){
+			var c = this.corners[i];
+			//c.moveDigital(this.intervalPhysicsDigital);
+			c.moveDigital(seconds);
+			maxPointRadius = Math.max(c.radius, maxPointRadius);
+		}
+		
+		/*for(i in this.corners){
+			this.corners[i].moveToSee();
+		}*/
+		
+		
+		var angle = angleNegPiToPiExcl(this.estimateAngleAsIfWasCircular());
+		var rotateMagnitude = .02; //because big rotation destabilizes it, and this is fast on screen
+		//var rotateMagnitude = 0;
+		angle = angleNegPiToPiExcl(this.estimateAngleAsIfWasCircular())<0 ? rotateMagnitude : -rotateMagnitude;
+		this.spreadByLinearInterpolateAndRotateAlongPerimeter(1, angle);
+		
+		
+		//FIXME dont hardcode the visible area, but byteRect is 3 of these stacked vertically so I have to for now
+		//this.stayInsideRectangle(256, 0, 384, 128);
+		//var centerY = 128+128+64; //low 1/3
+		var centerY = 64; //top 1/3
+		var centerX = 64;
+		var visibleRadius = 63;
+		this.stayInsideCircle(centerY, centerX, visibleRadius-maxPointRadius);
+	};
+	
+	/*this.physicsSmoothButUnstable = function(byteRect, seconds){
+		this.seconds = Math.max(0, Math.min(seconds, .05));
+		this.accelTowardSee(byteRect, seconds);
+		this.tangentNorm(seconds);
+		this.moveBySpeed(seconds);
+		this.nonlinearAccel(seconds);
+		this.moveBySpeed(seconds);
+		this.frictionEtc(seconds);
+		this.moveBySpeed(seconds);
+		//FIXME dont hardcode the visible area, but byteRect is 3 of these stacked vertically so I have to for now
+		this.stayInsideRectangle(256, 0, 384, 128);
+	};*/
+	
+	//all positions range -1 to 1, around average position of points and normed by max radius
+	this.relPositionsAsScalarArray = function(){
+		//TODO merge duplicate code
+		var sumY = 0;
+		var sumX = 0;
+		for(i in this.corners){
+			var c = this.corners[i];
+			sumY += c.py;
+			sumX += c.px;
+		};
+		var centerY = sumY/this.corners.length;
+		var centerX = sumX/this.corners.length;
+		var maxRadius = 0;
+		for(i in this.corners){
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			var r = Math.sqrt(dy*dy + dx*dx);
+			maxRadius = Math.max(r, maxRadius);
+		};
+		var a = [];
+		for(i in this.corners){
+			var c = this.corners[i];
+			var dy = c.py-centerY;
+			var dx = c.px-centerX;
+			var dataY = dy/maxRadius;
+			var dataX = dx/maxRadius;
+			a.push(dataY);
+			a.push(dataX);
+		}
+		return a;
+	};
+	this.relPositionsAsHexString = function(){
+		var a = this.relPositionsAsScalarArray();
+		var hex = '';
+		for(i in a){
+			hex += fourHexDigitsForBifraction(a[i]);
+		}
+		return hex;
+	};
+	//For now, just do this once when it starts, since could destabilize if change while running
+	this.updateTargetAdjacentDistance();
+	log('targetAdjacentDistance: '+this.targetAdjacentDistance);
+};
+
+var copyBetweenHalfsOfCanvas = function(){
+	var siz = canvas.width*canvas.height*4;
+	var twoThirdsSize = siz*2/3;
+	var oneThirdSize = siz/3;
+	var move = (canvas.width+1)*4;
+	for(var i=0; i<oneThirdSize; i++){
+		//var oldNumber = canvasPixels[oneThirdSize+i+move];
+		//var decay = .4;
+		//canvasPixels[oneThirdSize+i+move] = Math.floor(canvasPixels[i]*decay + (1-decay)*oldNumber);
+		//canvasPixels[oneThirdSize+i] = canvasPixels[i];
+		canvasPixels[oneThirdSize+i] = canvasPixels[twoThirdsSize+i]; //copy from low 1/3 to middle 1/3
+	}
+};
+
+var edgeDetect = function(){
+	var siz = canvas.width*canvas.height*4;
+	var oneThirdSize = siz/3;
+	var twoThirdsSize = siz*2/3;
+	for(var i=0; i<oneThirdSize; i++){
+		if((i%4) == 3) canvasPixels[i] = 255;  //top 1/3
+		else{
+			//if((i%4)!=2) continue;
+			var newPixelDim = canvasPixels[twoThirdsSize+i];
+			var oldPixelDim = canvasPixels[oneThirdSize+i];
+			var diff = Math.abs(newPixelDim-oldPixelDim);
+			var fraction = Math.max(0, Math.min(diff*diff*.0004, .999999));
+			canvasPixels[i] = Math.floor(fraction*256); //top 1/3
+		}
+	}
+};
+
+var flipHorizontal = function(){
+	for(var y=0; y<canvas.height; y++){
+		var offset = y*canvas.width*4;
+		var halfWidthFloor = Math.floor(canvas.width/2);
+		for(var x=0; x<halfWidthFloor; x++){
+			for(var colorDim=0; colorDim<4; colorDim++){
+				var lowIndex = offset+x*4+colorDim;
+				var highIndex = offset+(canvas.width-1-x)*4+colorDim;
+				var temp = canvasPixels[lowIndex];
+				canvasPixels[lowIndex] = canvasPixels[highIndex];
+				canvasPixels[highIndex] = temp;
+			}
+		}
+	}
+	//canvasImageData = canvasContext.getImageData(0, 0, canvas.width, canvas.height);
+	//canvasPixels = canvasImageData.data;
+};
+
+var snapshot = function(){
+	//canvas.width = video.width;
+	//canvas.height = video.height*2;
+	//canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height/2);
+	//canvasContext.drawImage(video, 0, 0, canvas.width, canvas.height/3);
+	canvasContext.drawImage(video, 0, canvas.height*2/3, canvas.width, canvas.height/3);
+	
+	//canvasImageData = canvasContext.getImageData(0, 0, canvas.width, canvas.height);
+	//canvasPixels = canvasImageData.data;
+	updateCanvasObjects();
+	
+};
+
+var noStream = function(){
+	log('Access to camera was denied!');
+};
+
+var gotStream = function(stream){
+	var myButton = document.getElementById('buttonStart');
+	if (myButton) myButton.disabled = true;
+	videoStream = stream;
+	log('Got stream.');
+	video.onerror = function ()
+	{
+		log('video.onerror');
+		if (video) stop();
+	};
+	stream.onended = noStream;
+	if (window.webkitURL) video.src = window.webkitURL.createObjectURL(stream);
+	else if (video.mozSrcObject !== undefined)
+	{//FF18a
+		video.mozSrcObject = stream;
+		video.play();
+	}
+	else if (navigator.mozGetUserMedia)
+	{//FF16a, 17a
+		video.src = stream;
+		video.play();
+	}
+	else if (window.URL) video.src = window.URL.createObjectURL(stream);
+	else video.src = stream;
+	myButton = document.getElementById('buttonSnap');
+	if (myButton) myButton.disabled = false;
+	myButton = document.getElementById('buttonStop');
+	if (myButton) myButton.disabled = false;
+	
+	updateCanvasObjects();
+	nextState();
+	
+	
+		
+	var testDiv = document.getElementById('testDiv');
+	for(i in videoStream){
+		testDiv.innerHTML += '<br>videoStream['+i+'] = '+videoStream[i];
+	}
+};
+
+//var seer = new SmartblobSeer(16, 128*2.5, 64, 25);
+//var seer = new SmartblobSeer(32, 128*2.5, 64, 25);
+//var seer = new SmartblobSeer(32, 128*2.5, 64, 15);
+//var seer = new SmartblobSeer(32, 128*2.5, 64, 50);
+var seer = new SmartblobSeer(32, 64, 64, 50);
+
+seer.aveDevRadius();
+
+log('xx');
+
+var updateCanvasObjects = function(){
+	canvasContext = canvas.getContext('2d');
+	canvasImageData = canvasContext.getImageData(0, 0, canvas.width, canvas.height);
+	canvasPixels = canvasImageData.data;
+	byteRect = new ByteRect(canvasPixels, canvas.height, canvas.width);
+};
+
+/*var copyToCanvas = function(){
+	flipHorizontal();
+	//canvasContext.putImageData(canvasImageData, 0, 0);
+	copyBetweenHalfsOfCanvas();
+	canvasContext.putImageData(canvasImageData, 0, 0);
+	flipHorizontal();
+	//canvasContext.putImageData(canvasImageData, 0, 0);
+	snapshot();
+	canvasContext.putImageData(canvasImageData, 0, 0);
+	flipHorizontal();
+	edgeDetect();
+	canvasContext.putImageData(canvasImageData, 0, 0);
+	//canvasContext.putImageData(canvasImageData, 0, 0);
+	seer.paint(byteRect);
+	canvasContext.putImageData(canvasImageData, 0, 0);
+};*/
+
+//Originally this function used a sort by comparator, where the comparator looked at the 2 data
+//(in this case brightness in canvas of red green or blue) and compared them, and sorted the pointers by that,
+//and after sorted it defines the output (in this case brightness) as that percentile.
+var normColorOfCanvasBySortedPointers = function(byteOffsetOfColor){
+	
+	canvas = document.getElementById('canvas');
+	//context = canvas.getContext('2d');
+	//imageData = context.getImageData(0, 0, 50, 50);
+	
+	//canvasImageData = context.getImageData(0, 0, canvas.width, canvas.height);
+	//canvasPixels = canvasImageData.data;
+	
+	//pixels = imageData.data;
+	
+	//log('pixels='+pixels);
+	
+	var howManyPixels = canvas.height*canvas.width;
+	//log('howManyPixels='+howManyPixels);
+	//log('pixels 2020 = '+pixels[2020]);
+	//log('pixels 55 55 2 = '+pixels[(55*canvas.width+55)*4+2]);
+	//log('pixels 0 = '+pixels[0]);
+	//var offset = howManyPixels*2/3; //low 1/3
+	var offset = 0; //top 1/3
+	howManyPixels /= 3;
+	var sum = 0;
+	for(var p=0; p<howManyPixels; p++){
+		//pixels[p*4+byteOffsetOfColor] = 248;
+		//pixels[p*4+byteOffsetOfColor] = 0;
+		//pixels[p*4+byteOffsetOfColor] = Math.min(255, pixels[p*4+byteOffsetOfColor]*5);
+		//pixels[p*4+byteOffsetOfColor] = Math.min(255, pixels[p*4+byteOffsetOfColor]*4);
+		
+		//canvasPixels[(offset+p)*4+0] = Math.min(255, canvasPixels[(offset+p)*4+0]*4);
+		//canvasPixels[(offset+p)*4+1] = Math.min(255, canvasPixels[(offset+p)*4+1]*4);
+		//canvasPixels[(offset+p)*4+2] = Math.min(255, canvasPixels[(offset+p)*4+2]*4);
+		sum += canvasPixels[(offset+p)*4+byteOffsetOfColor];
+	}
+	var ave = sum/howManyPixels;
+	var sumOfSquares = 0;
+	for(var p=0; p<howManyPixels; p++){
+		var data = canvasPixels[(offset+p)*4+byteOffsetOfColor];
+		var diff = data-ave;
+		sumOfSquares += diff*diff;
+	}
+	var aveSquare = sumOfSquares/howManyPixels;
+	var stdDev = Math.sqrt(aveSquare);
+	//log('stdDev: '+stdDev);
+	if(stdDev == 0) stdDev = 1;
+	for(var p=0; p<howManyPixels; p++){
+		var data = canvasPixels[(offset+p)*4+byteOffsetOfColor];
+		var bellCurve = (data-ave)/stdDev;
+		//canvasPixels[(offset+p)*4+byteOffsetOfColor] = Math.max(0, Math.min(200+bellCurve*50, 255));
+		//canvasPixels[(offset+p)*4+byteOffsetOfColor] = Math.max(0, Math.min(-50+bellCurve*10, 255));
+		//canvasPixels[(offset+p)*4+byteOffsetOfColor] = Math.max(0, Math.min(-40+bellCurve*130, 255));
+		canvasPixels[(offset+p)*4+byteOffsetOfColor] = Math.max(0, Math.min(128+bellCurve*300, 255));
+	}
+};
+
+var normCanvasColors = function(){
+	normColorOfCanvasBySortedPointers(0);
+	normColorOfCanvasBySortedPointers(1);
+	normColorOfCanvasBySortedPointers(2);
+};
+
+var timePrevCycle = time();
+
+var lastAjaxFinishedWhen = time();
+
+var nextState = function(){
+	//log('nextState '+Math.random());
+	if(document.getElementById('chkPause').checked){
+		setTimeout(nextState, 200);
+	}else{
+		
+		//copyToCanvas();
+		
+		//flipHorizontal();
+		//canvasContext.putImageData(canvasImageData, 0, 0);
+		copyBetweenHalfsOfCanvas();
+		canvasContext.putImageData(canvasImageData, 0, 0);
+		//flipHorizontal();
+		//canvasContext.putImageData(canvasImageData, 0, 0);
+		snapshot();
+		canvasContext.putImageData(canvasImageData, 0, 0);
+		//flipHorizontal();
+		edgeDetect();
+		canvasContext.putImageData(canvasImageData, 0, 0);
+		
+		//normCanvasColors();
+		//canvasContext.putImageData(videoImageData, 0, 0);
+		
+		var now = time();
+		var seconds = now-timePrevCycle;
+		timePrevCycle = now;
+		var secondsTruncated = Math.max(0, Math.min(seconds, .03));
+		seer.physics(byteRect, secondsTruncated);
+		//seer.moveTowardSee(byteRect);
+		//FIXME TODO? seer.normPositions();
+		//canvasContext.putImageData(canvasImageData, 0, 0);
+		seer.paint(byteRect);
+		canvasContext.putImageData(canvasImageData, 0, 0);
+		//log("corner7: "+seer.corners[7]);
+		
+		//if(Math.random() < .01) log('relPositionsAsHexString: '+seer.relPositionsAsHexString());
+		
+		
+		//if(ajaxCallsInProgress == 0){
+			var noAjaxForHowLong = now-lastAjaxFinishedWhen;
+			if(.1 < noAjaxForHowLong){
+				ajaxSend("player0Smartblob/"+seer.relPositionsAsHexString());
+			}
+		//}
+		
+		
+		//normCanvasColors();
+		//canvasContext.putImageData(videoImageData, 0, 0);
+		//canvasContext.putImageData(canvasImageData, 0, 0);
+		//setTimeout(nextState, 10);
+		setTimeout(nextState, 25);
+	}
+};
+
+var start = function(){
+	if(started) return;
+	started = true;
+	
+	if ((typeof window === 'undefined') || (typeof navigator === 'undefined')) log('This page needs a Web browser with the objects window.* and navigator.*!');
+	else if (!(video && canvas)) log('HTML context error!');
+	else
+	{
+		log('Get user media…');
+		if (navigator.getUserMedia) navigator.getUserMedia({video:true}, gotStream, noStream);
+		else if (navigator.oGetUserMedia) navigator.oGetUserMedia({video:true}, gotStream, noStream);
+		else if (navigator.mozGetUserMedia) navigator.mozGetUserMedia({video:true}, gotStream, noStream);
+		else if (navigator.webkitGetUserMedia) navigator.webkitGetUserMedia({video:true}, gotStream, noStream);
+		else if (navigator.msGetUserMedia) navigator.msGetUserMedia({video:true, audio:false}, gotStream, noStream);
+		else log('getUserMedia() not available from your Web browser!');
+	}
+};
+
+window.onload = start;
+
+//start();
+
+//nextState();
+
+</script>
+</body></html>

@@ -1,11 +1,11 @@
-/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
+/** Ben F Rayfield offers HumanAiCore opensource GNU LGPL */
 package humanaicore.realtimeschedulerTodoThreadpool;
-//import static humanaicore.common.CommonFuncs.*;
+import static humanaicore.common.CommonFuncs.*;
 
 import java.util.*;
 //import jsoundcard.JSoundCard;
 
-//import humanaicore.common.Nanotimer;
+import humanaicore.common.Nanotimer;
 //import humanaicore.jselfmodify.JSelfModify;
 
 /** TODO Use higher priority threads and sleep more often? Will system permissions allow it? */
@@ -36,7 +36,7 @@ public class RealtimeScheduler{
 	
 	/** TODO If many tasks, use a thread pool */
 	public static synchronized void start(Task t, double secondsSleep){
-		//log("START RealtimeScheduler.start secondsSleep="+secondsSleep+" task="+t);
+		log("START RealtimeScheduler.start secondsSleep="+secondsSleep+" task="+t);
 		TaskThread th = taskToThread.get(t);
 		if(th == null){
 			th = new TaskThread(t, secondsSleep);
@@ -48,7 +48,7 @@ public class RealtimeScheduler{
 		}else{
 			th.secondsSleep = secondsSleep; //has no effect on current sleep. Starts next sleep.
 		}
-		//log("END RealtimeScheduler.start secondsSleep="+secondsSleep+" task="+t);
+		log("END RealtimeScheduler.start secondsSleep="+secondsSleep+" task="+t);
 	}
 	
 	public static synchronized void scheduleStop(Task t){
@@ -62,12 +62,12 @@ public class RealtimeScheduler{
 	--Ben F Rayfield (sign your comments if you change things)
 	*/
 	public static synchronized void stop(Task t, boolean waitForStop){
-		//log("Stopping task "+t);
+		log("Stopping task "+t);
 		if(waitForStop) throw new RuntimeException("TODO this thread system needs redesign because if waitForStop is true it has been deadlocking");
-		//log("START RealtimeScheduler.stop waitForStop="+waitForStop+" task="+t);
+		log("START RealtimeScheduler.stop waitForStop="+waitForStop+" task="+t);
 		TaskThread th = taskToThread.get(t);
 		if(th != null){
-			//log("TaskThread found for "+t+" Setting keepRunning to false");
+			log("TaskThread found for "+t+" Setting keepRunning to false");
 			th.keepRunning = false;
 			//increaseToMaxPriority(th); //so it can see its supposed to stop quickly
 			//th.task = null;
@@ -83,7 +83,7 @@ public class RealtimeScheduler{
 				}catch(InterruptedException e){}
 			}
 		}
-		//log("END RealtimeScheduler.stop waitForStop="+waitForStop+" task="+t);
+		log("END RealtimeScheduler.stop waitForStop="+waitForStop+" task="+t);
 	}
 	
 	public static synchronized boolean taskIsRunning(Task t){
@@ -96,7 +96,7 @@ public class RealtimeScheduler{
 	}
 	
 	static synchronized void onTaskEnd(Task t){
-		//log("\r\n\r\n\r\n\r\nRealtimeScheduler removing "+t+"\r\n\r\n\r\n\r\n");
+		log("\r\n\r\n\r\n\r\nRealtimeScheduler removing "+t+"\r\n\r\n\r\n\r\n");
 		taskToThread.remove(t);
 	}
 	
@@ -173,12 +173,12 @@ public class RealtimeScheduler{
 		if(thisPri < maxPri){
 			try{
 				t.setPriority(maxPri);
-				//log("Increased priority of "+t+" from "+thisPri+" to "+maxPri);
+				log("Increased priority of "+t+" from "+thisPri+" to "+maxPri);
 			}catch(Exception e){
 				throw new RuntimeException("Could not increase priority of "+t, e);
 			}
 		}else{
-			//log("Thread "+t+" was already at its max priority "+maxPri);
+			log("Thread "+t+" was already at its max priority "+maxPri);
 		}
 	}
 	
@@ -189,7 +189,7 @@ public class RealtimeScheduler{
 		if(nextPriority != thisPri){
 			try{
 				t.setPriority(maxPri);
-				//log("Increased priority of "+t+" from "+thisPri+" to "+maxPri);
+				log("Increased priority of "+t+" from "+thisPri+" to "+maxPri);
 			}catch(Exception e){
 				throw new RuntimeException("Could not increase priority of "+t, e);
 			}
@@ -224,7 +224,7 @@ public class RealtimeScheduler{
 					/*if(o instanceof TimedEvent){
 						log(this+" nextState "+((TimedEvent)o).time);
 					}*/
-					//log("\r\n\r\n"+this+" "+o);
+					log("\r\n\r\n"+this+" "+o);
 				}
 				public double preferredInterval(){ return .5; }
 				public String toString(){
@@ -254,7 +254,7 @@ public class RealtimeScheduler{
 			});
 			String s = "Tasks running:";
 			for(Task t : tasksArray) s += " "+t;
-			//log(s);
+			log(s);
 			if(/*timer.secondsSinceStart() > 2 &&*/ i < testTasks.size()){
 				//log("About to stop and wait on it stopping "+testTasks.get(i));
 				//stop(testTasks.get(i), true);

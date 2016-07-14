@@ -1,4 +1,4 @@
-/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
+/** Ben F Rayfield offers this "common" software to everyone opensource GNU LGPL */
 package humanaicore.common;
 import java.security.SecureRandom;
 import java.util.Random;

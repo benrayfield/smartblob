@@ -1,4 +1,4 @@
-/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
+/** Ben F Rayfield offers HumanAiCore opensource GNU LGPL */
 package humanaicore.realtimeschedulerTodoThreadpool;
 
 /** A task which does the same thing regardless of how much time

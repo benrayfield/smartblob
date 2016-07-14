@@ -1,4 +1,4 @@
-/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
+/** Ben F Rayfield offers HumanAiCore opensource GNU LGPL */
 package humanaicore.realtimeschedulerTodoThreadpool;
 
 /** This is a more efficient and general replacement for Task.
@@ -13,11 +13,16 @@ of their calculation as a Task would do, because event(Object) may
 be called many times in the same millisecond or less often
 like would happen in a Task, and its probably not on event intervals,
 so the object has to consider what time it is
+(DatastructUtil.time() has microsecond precision)
+before deciding how much of the next calculation to do
+and considering the new Object coming in representing an event.
 <br><br>
-If its a humanaicore.realtimeschedulerTodoThreadpool.TimedEvent,
-use its time var which may slightly differ from Time.time()
-because of running may times in a loop to simulate different parts
-of a larger time cycle.
+This is needed to avoid the slowness and display problems of Dynarect
+when repainted when events dont happen, or on the other side of that
+when they have a long interval they dont get repainted when events happen.
+<br><br>
+TODO Should Eventable be merged with Dynarect.in and Dynarect.out funcs?
+x and y params could be part of context object
 */
 public interface Eventable{
 

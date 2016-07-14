@@ -1,6 +1,6 @@
-/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
+/** Ben F Rayfield offers HumanAiCore opensource GNU LGPL */
 package humanaicore.realtimeschedulerTodoThreadpool;
-import humanaicore.common.Time;
+import humanaicore.common.CoreUtil;
 
 /** Normally used as parameter of Eventable.event(Object) when Task runs again.
 The main other kind of parameter is MultiTouch, which I'm changing to extend this.
@@ -16,7 +16,7 @@ public class TimedEvent implements SequenceEvent{
 	
 	/** Uses current time from DatastructUtil.time() */
 	public TimedEvent(){
-		this(Time.time());
+		this(CoreUtil.time());
 	}
 	
 	public TimedEvent(double time){

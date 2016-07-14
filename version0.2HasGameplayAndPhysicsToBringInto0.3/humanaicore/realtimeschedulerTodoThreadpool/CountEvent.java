@@ -1,4 +1,4 @@
-/** Ben F Rayfield offers this "common" software opensource GNU LGPL or MIT license */
+/** Ben F Rayfield offers HumanAiCore opensource GNU LGPL */
 package humanaicore.realtimeschedulerTodoThreadpool;
 
 /** Similar to TimedEvent and used as a parameter in Eventable.event(Object)
@@ -11,8 +11,15 @@ TODO Should CountEvent have a string name for what is being counted? Probably no
 <br><br>
 TODO instead of SequenceEvent, should TimedEvent and CountEvent extend Number?
 */
-public interface SequenceEvent{
+public class CountEvent implements SequenceEvent{
 	
-	public Number sequenceNumber();
+	public final long count;
+	
+	/** Uses current time from DatastructUtil.time() */
+	public CountEvent(long count){
+		this.count = count;
+	}
+	
+	public Number sequenceNumber(){ return count; }
 
 }
